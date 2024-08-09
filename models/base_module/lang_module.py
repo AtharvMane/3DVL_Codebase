@@ -78,17 +78,28 @@ class LangModule(nn.Module):
             #main_lang_len = data_dict["main_lang_len_list"]
             main_lang_len = main_lang_len.reshape(batch_size * len_nun_max)
 
-            if data_dict["istrain"][0] == 1 and random.random() < 0.5:
+            if data_dict["istrain"][0] == 1 and random.random() < 1:
                 for i in range(word_embs.shape[0]):
                     new_word_emb = copy.deepcopy(word_embs[i])
                     new_len = lang_len[i] - main_lang_len[i]
-                    new_word_emb[:new_len] = word_embs[i, main_lang_len[i]:lang_len[i]]
+                    try:
+                        new_word_emb[:new_len] = word_embs[i, main_lang_len[i]:lang_len[i]]
+                    except:
+                        print(f"word_embs: {word_embs[i].shape}")
+                        print(f"main_lang_len: {main_lang_len[i]},lang_len: {lang_len[i]}")
+                        print(f"scene_id: {data_dict['scene_id']}")
+                        print(f"scan_idx: {data_dict['scan_idx']}")
+                        fin_sent = ""
+                        for token in data_dict['token']:
+                           fin_sent = fin_sent + token[i]
+                        print(f"tokens: {fin_sent}")
+                        print(f"tokens: {data_dict['tokens']}")
                     new_word_emb[new_len:lang_len[i]] = word_embs[i, :main_lang_len[i]]
                     word_embs[i] = new_word_emb
 
         # lang_feat = pack_padded_sequence(word_embs, lang_len, batch_first=True, enforce_sorted=False)
-        lang_feat = pack_padded_sequence(word_embs, lang_len.cpu(), batch_first=True, enforce_sorted=False)
 
+        lang_feat = pack_padded_sequence(word_embs, lang_len.cpu(), batch_first=True, enforce_sorted=False)
         out, lang_last = self.gru(lang_feat)
 
         padded = pad_packed_sequence(out, batch_first=True)

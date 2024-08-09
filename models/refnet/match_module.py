@@ -38,7 +38,7 @@ class MatchModule(nn.Module):
         features = data_dict["bbox_feature"]  # batch_size, num_proposals, feat_size
 
         batch_size, num_proposal = features.shape[:2]
-        len_nun_max = data_dict["lang_feat_list"].shape[1]
+        len_nun_max = data_dict["ground_lang_feat_list"].shape[1]
         #objectness_masks = objectness_masks.permute(0, 2, 1).contiguous()  # batch_size, 1, num_proposals
         data_dict["random"] = random.random()
 

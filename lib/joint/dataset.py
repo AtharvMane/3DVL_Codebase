@@ -414,7 +414,9 @@ class ScannetReferenceDataset(ReferenceDataset):
         use_multiview=False, 
         augment=False,
         shuffle=False,
-        scan2cad_rotation=None):
+        scan2cad_rotation=None,
+        human_perturbation_percentage = 5
+        ):
 
         # NOTE only feed the scan2cad_rotation when on the training mode and train split
 
@@ -437,6 +439,19 @@ class ScannetReferenceDataset(ReferenceDataset):
         self._load_data(name)
         self.multiview_data = {}
         self.should_shuffle = shuffle
+
+        self.human_perturbation_percentage = human_perturbation_percentage
+
+        human_scan_dir_path = HUMAN_SCANS_DIR
+        human_keypoints_dir_path = HUMAN_KEYPOINTS_DIR
+        human_scan_paths = [os.path.join(human_scan_dir_path, human_file) for human_file in os.listdir(human_scan_dir_path)]
+        human_keypoints_paths = [os.path.join(human_keypoints_dir_path, human_keypoints_file) for human_keypoints_file in os.listdir(human_keypoints_dir_path)]
+        self.human_meshes=[o3d.io.read_triangle_mesh(human_scan_path) for human_scan_path in human_scan_paths]
+        self.human_keypoints = [np.load(x) for x in human_keypoints_paths]
+
+        self.human_metadata = {scene.split(".")[0]: torch.load(f"{HUMAN_METADATA_DIR}/{scene}") for scene in os.listdir(HUMAN_METADATA_DIR)}
+        for scene, data in self.human_metadata.items():
+            data.sort(key=sortObj)
        
     def __len__(self):
         #return len(self.scanrefer)
@@ -552,11 +567,82 @@ class ScannetReferenceDataset(ReferenceDataset):
             ground_main_lang_len_list.append(ground_main_lang_len)
             ground_first_obj_list.append(ground_first_obj)
 
+
+        human_index = 0
+        human_mesh = self.human_meshes[human_index]
+        keypoints = self.human_keypoints[human_index]
+
+        # get pci
+        scene_human_metadata = self.human_metadata[scene_id]
+        #scene_human_metadata.sort(key=sortObj)
+        try:
+            obj_human_metadata = scene_human_metadata[object_id_list[0]]
+        except:
+            print(f"scene: {scene_id}, Real obj id: {object_id_list[0]}, len: {len(scene_human_metadata)}")
+
+
+
+
         # get pc
         mesh_vertices = self.scene_data[scene_id]["mesh_vertices"]
         instance_labels = self.scene_data[scene_id]["instance_labels"]
         semantic_labels = self.scene_data[scene_id]["semantic_labels"]
         instance_bboxes = self.scene_data[scene_id]["instance_bboxes"]
+
+
+        if "transforms" in obj_human_metadata.keys():
+            transform_idx = random.randint(1,len(obj_human_metadata['transforms']))-1
+            human_transform = (obj_human_metadata['transforms'][transform_idx])
+            human_keypoint = torch.tensor(self.human_keypoints[human_index])
+            temp_keypoint = torch.ones((2,4), dtype = human_keypoint.dtype)
+            temp_keypoint[:,:3] = human_keypoint
+            temp_keypoint = (human_transform.double()@temp_keypoint.t()).t()[:,:3]
+            human_keypoint = temp_keypoint[:,:,None]
+
+            #ADDING ANGLE + SLIGHT PLACEMENT PERTURBATION TO HUMAN
+            human_center_translate = torch.eye(4, dtype=torch.float32)
+            human_center_translate[:3,3] = -human_keypoint[0,:,0]
+            human_perturbation_range = 0.5*self.human_perturbation_percentage*2*torch.pi/100
+            human_perturbation = torch.rand(1)*human_perturbation_range
+            perturb_transform = torch.eye(4, dtype=torch.float)
+            perturb_transform[0,0] = torch.cos(human_perturbation)
+            perturb_transform[1,1] = torch.cos(human_perturbation)
+            perturb_transform[0,1] = torch.sin(human_perturbation)
+            perturb_transform[1,0] = -torch.sin(human_perturbation)
+            perturb_transform = human_center_translate.inverse()@perturb_transform@human_center_translate
+            human_transform = perturb_transform @ human_transform
+            human_mesh.transform(human_transform)
+            #HUMAN MESH CREATION
+            human_keypoint = (perturb_transform.double() @ torch.cat([human_keypoint,torch.tensor([[[1]],[[1]]])],1))[:,:3]
+            human_normals = np.asarray(human_mesh.vertex_normals, dtype=np.float32)
+            human_xyz = np.asarray(human_mesh.vertices, dtype=np.float32)
+            human_rgb = np.rint(np.asarray(self.human_meshes[0].vertex_colors)*255).astype(np.float32)
+            human_mesh_vertices = np.concatenate([human_xyz, human_rgb, human_normals], axis=1)
+#            print(f"human_mesh_vertices: {human_mesh_vertices}")
+
+            #HUMAN LABEL CREATION
+            human_sem_label = np.array([31]*human_mesh_vertices.shape[0], dtype=np.uint32)
+            human_instance_label = np.array([np.max(instance_labels)+1]*human_mesh_vertices.shape[0], dtype=np.uint32)
+
+            human_max = np.max(human_mesh_vertices)
+            xmin = np.min(human_xyz[:,0])
+            ymin = np.min(human_xyz[:,1])
+            zmin = np.min(human_xyz[:,2])
+            xmax = np.max(human_xyz[:,0])
+            ymax = np.max(human_xyz[:,1])
+            zmax = np.max(human_xyz[:,2])
+            bbox = np.array([(xmin+xmax)/2, (ymin+ymax)/2, (zmin+zmax)/2, xmax-xmin, ymax-ymin, zmax-zmin, human_sem_label[0], human_instance_label[0]-1])
+            #print(f"max_instance_label: {np.max(instance_labels)}, human_instance_label: {human_instance_label}")
+
+            #CONCAT HUMAN INFO
+            mesh_vertices = np.concatenate([mesh_vertices, human_mesh_vertices], axis = 0)
+            instance_labels = np.concatenate([instance_labels, human_instance_label], axis = 0)
+            semantic_labels = np.concatenate([semantic_labels, human_sem_label], axis = 0)
+            instance_bboxes = np.concatenate([instance_bboxes,bbox[None]], axis = 0)
+
+
+
+
 
         if not self.use_color:
             point_cloud = mesh_vertices[:,0:3] # do not use color for now

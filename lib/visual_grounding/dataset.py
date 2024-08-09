@@ -18,7 +18,9 @@ from lib.configs.config_grounding import CONF
 from utils.pc_utils import random_sampling, rotx, roty, rotz
 from data.scannet.model_util_scannet import rotate_aligned_boxes, ScannetDatasetConfig, rotate_aligned_boxes_along_axis
 import random
-
+import open3d as o3d
+import torch
+from tqdm import tqdm
 # data setting
 DC = ScannetDatasetConfig()
 MAX_NUM_OBJ = 128
@@ -29,6 +31,18 @@ SCANNET_V2_TSV = os.path.join(CONF.PATH.SCANNET_META, "scannetv2-labels.combined
 # MULTIVIEW_DATA = os.path.join(CONF.PATH.SCANNET_DATA, "enet_feats.hdf5")
 MULTIVIEW_DATA = CONF.MULTIVIEW
 GLOVE_PICKLE = os.path.join(CONF.PATH.DATA, "glove.p")
+
+
+
+
+HUMAN_PATH = os.path.join(CONF.PATH.DATA, "human_data_newer")
+HUMAN_METADATA_DIR = os.path.join(CONF.PATH.DATA, "finals_v16_full")
+
+def sortObj(val):
+    return val["object_id"]
+
+
+
 
 class ScannetReferenceDataset(Dataset):
 
@@ -41,7 +55,9 @@ class ScannetReferenceDataset(Dataset):
         use_normal=False,
         use_multiview=False,
         augment=False,
-        shuffle=False):
+        shuffle=False,
+        human_perturbation_percentage = 5
+        ):
 
         self.scanrefer = scanrefer
         self.scanrefer_new = scanrefer_new
@@ -62,6 +78,56 @@ class ScannetReferenceDataset(Dataset):
         # self.shuffled = False
         self.should_shuffle = shuffle
         # self.shuffle_data()
+
+
+
+        self.human_perturbation_percentage = human_perturbation_percentage
+        
+        
+        reflect_trans = np.eye(4)
+        reflect_trans[0,0] = -1
+        reflect_trans3 = np.eye(3)
+        reflect_trans3[0,0] = -1
+
+        self.human_data = {}
+        for human_type in tqdm(os.listdir(HUMAN_PATH)):
+            mesh_files_dir = f"{HUMAN_PATH}/{human_type}/meshes"
+            joints_files_dir = f"{HUMAN_PATH}/{human_type}/joints"
+
+            human_type_dict = {}
+            for filename in os.listdir(mesh_files_dir):
+                human_pose_name = filename.split(".")[0]
+
+                human_mesh_left = o3d.io.read_triangle_mesh(f"{mesh_files_dir}/{filename}")
+                human_mesh_right = o3d.geometry.TriangleMesh(human_mesh_left)
+                human_mesh_right.transform(reflect_trans)
+
+                with open(os.path.join(f"{joints_files_dir}/{human_pose_name}.pkl"), 'rb') as f:
+                    human_joints_left = pickle.load(f)
+
+                human_joints_right = {}
+
+                for key in human_joints_left:
+                    if "right" in key:
+                        human_joints_right[key.replace("right", "left")] = reflect_trans3@human_joints_left[key]
+                    elif "left" in key:
+                        human_joints_right[key.replace("left","right")] = reflect_trans3@human_joints_left[key]
+                    else:
+                        human_joints_right[key] = reflect_trans3@human_joints_left[key]
+                human_type_dict[human_pose_name] = {
+                                                        "left_mesh": human_mesh_left,
+                                                        "joints_left": human_joints_left,
+                                                        "right_mesh": human_mesh_right,
+                                                        "joints_right": human_joints_right,
+                                                    }
+                #if base_num!=len(np.asarray(human_mesh_left.vertices)):
+                #    print(len(np.asarray(human_mesh_left.vertices)))
+            self.human_data[human_type] = human_type_dict
+        
+        self.human_meta_data = {scene_id.split(".")[0]: torch.load(f"{HUMAN_METADATA_DIR}/{scene_id}") for scene_id in os.listdir(HUMAN_METADATA_DIR)}
+
+
+
 
     def __len__(self):
         #return len(self.scanrefer_new)
@@ -151,7 +217,10 @@ class ScannetReferenceDataset(Dataset):
                 main_lang_len = self.lang_main[scene_id][str(object_id)][ann_id]["len"]
                 first_obj = self.lang_main[scene_id][str(object_id)][ann_id]["first_obj"]
                 unk = self.lang_main[scene_id][str(object_id)][ann_id]["unk"]
-
+            if lang_len < main_lang_len:
+                print(f"main_lang_len: {main_lang_len}")
+                print(f"main_lang_len2: {len(main_lang_feat)}")
+                print(f"token len: {len(self.scanrefer_new[idx][i]['token'])}")
             object_id_list.append(object_id)
             object_name_list.append(object_name)
             ann_id_list.append(ann_id)
@@ -163,11 +232,163 @@ class ScannetReferenceDataset(Dataset):
             first_obj_list.append(first_obj)
             unk_list.append(unk)
 
+
+
+
+#        human_index = 0
+#        human_mesh = o3d.geometry.TriangleMesh(self.human_meshes[human_index])
+#        keypoints = self.human_keypoints[human_index]
+
+        # get pci
+#        scene_human_metadata = self.human_metadata[scene_id]
+#        #scene_human_metadata.sort(key=sortObj)
+#        try:
+#            obj_human_metadata = scene_human_metadata[object_id_list[0]]
+#        except:
+#            print(f"scene: {scene_id}, Real obj id: {object_id_list[0]}, len: {len(scene_human_metadata)}")
+
+
+
+
         # get pc
         mesh_vertices = self.scene_data[scene_id]["mesh_vertices"]
         instance_labels = self.scene_data[scene_id]["instance_labels"]
         semantic_labels = self.scene_data[scene_id]["semantic_labels"]
         instance_bboxes = self.scene_data[scene_id]["instance_bboxes"]
+
+
+
+
+
+        #if "transforms" in obj_human_metadata.keys():
+        #    transform_idx = random.randint(1,len(obj_human_metadata['transforms']))-1
+        #    human_transform = (obj_human_metadata['transforms'][transform_idx])
+        #    human_keypoint = torch.tensor(self.human_keypoints[human_index])
+        #    temp_keypoint = torch.ones((2,4), dtype = human_keypoint.dtype)
+        #    temp_keypoint[:,:3] = human_keypoint
+        #    temp_keypoint = (human_transform.double()@temp_keypoint.t()).t()[:,:3]
+        #    human_keypoint = temp_keypoint[:,:,None]
+#
+#            #ADDING ANGLE + SLIGHT PLACEMENT PERTURBATION TO HUMAN
+#            human_center_translate = torch.eye(4, dtype=torch.float32)
+##            human_center_translate[:3,3] = -human_keypoint[0,:,0]
+#            human_perturbation_range = 0.5*self.human_perturbation_percentage*2*torch.pi/100
+#            human_perturbation = torch.rand(1)*human_perturbation_range
+#            perturb_transform = torch.eye(4, dtype=torch.float)
+#            perturb_transform[0,0] = torch.cos(human_perturbation)
+#            perturb_transform[1,1] = torch.cos(human_perturbation)
+#            perturb_transform[0,1] = torch.sin(human_perturbation)
+#            perturb_transform[1,0] = -torch.sin(human_perturbation)
+#            perturb_transform = human_center_translate.inverse()@perturb_transform@human_center_translate
+#            human_transform = perturb_transform @ human_transform
+#            human_mesh.transform(human_transform)
+            #HUMAN MESH CREATION
+#            human_keypoint = (perturb_transform.double() @ torch.cat([human_keypoint,torch.tensor([[[1]],[[1]]])],1))[:,:3]
+ #           human_normals = np.asarray(human_mesh.vertex_normals, dtype=np.float32)
+ #           human_xyz = np.asarray(human_mesh.vertices, dtype=np.float32)
+ #           human_rgb = np.rint(np.asarray(self.human_meshes[0].vertex_colors)*255).astype(np.float32)
+#            human_mesh_vertices = np.concatenate([human_xyz, human_rgb, human_normals], axis=1)
+#            print(f"human_mesh_vertices: {human_mesh_vertices}")
+
+          # #HUMAN LABEL CREATION
+#            human_sem_label = np.array([31]*human_mesh_vertices.shape[0], dtype=np.uint32)
+#            human_instance_label = np.array([np.max(instance_labels)+1]*human_mesh_vertices.shape[0], dtype=np.uint32)
+
+ #           human_max = np.max(human_mesh_vertices)
+ #           xmin = np.min(human_xyz[:,0])
+ #           ymin = np.min(human_xyz[:,1])
+ #           zmin = np.min(human_xyz[:,2])
+ #           xmax = np.max(human_xyz[:,0])
+ #           ymax = np.max(human_xyz[:,1])
+ #           zmax = np.max(human_xyz[:,2])
+ #           bbox = np.array([(xmin+xmax)/2, (ymin+ymax)/2, (zmin+zmax)/2, xmax-xmin, ymax-ymin, zmax-zmin, human_sem_label[0], human_instance_label[0]-1])
+ #           #print(f"max_instance_label: {np.max(instance_labels)}, human_instance_label: {human_instance_label}")
+
+            #CONCAT HUMAN INFO
+#            mesh_vertices = np.concatenate([mesh_vertices, human_mesh_vertices], axis = 0)
+#            instance_labels = np.concatenate([instance_labels, human_instance_label], axis = 0)
+#            semantic_labels = np.concatenate([semantic_labels, human_sem_label], axis = 0)
+#            instance_bboxes = np.concatenate([instance_bboxes,bbox[None]], axis = 0)
+#
+#
+#
+#
+
+
+        object_id = object_id_list[0]
+        scene_meta_data = self.human_meta_data[scene_id]
+        human_data = scene_meta_data['human_info']
+        all_humans_data = human_data[object_id]
+
+        if len(all_humans_data['left'])==0 and len(all_humans_data['right'])==0:
+            lr = None
+        elif len(all_humans_data['left'])>0:
+            lr = 'left'
+        elif len(all_humans_data['right'])>0:
+            lr = 'right'
+
+        if not lr is None:
+            multi_human_lr = all_humans_data[lr]
+            human_id = random.randint(0,len(multi_human_lr)-1)
+            human_dict = multi_human_lr[human_id]
+            human_transforms = human_dict['axis_aligned_transforms']
+            arm_angles = human_dict['angle_bin']
+            transform_id = random.randint(0,len(human_transforms)-1)
+            human_transform = human_transforms[transform_id]
+            arm_angle = arm_angles[transform_id]
+            human_name = human_dict['human_name']
+            instance_id = human_dict['instance_id']
+            sem_label = 31
+
+            human_joints = self.human_data[human_name][f"l_h_{int(arm_angle.item())}"][f"joints_{lr}"]
+
+            human_center_translate = torch.eye(4, dtype=torch.float64)
+            human_center_translate[:3,3] = -torch.tensor(human_joints['left_shoulder'])
+            #print('left_shoulder: ', human_joints['left_shoulder'])
+            human_perturbation_range = 0.5*self.human_perturbation_percentage*2*torch.pi/100
+            human_perturbation = torch.rand(1)*human_perturbation_range
+            perturb_transform = torch.eye(4, dtype=torch.float64)
+            perturb_transform[0,0] = torch.cos(human_perturbation)
+            perturb_transform[1,1] = torch.cos(human_perturbation)
+            perturb_transform[0,1] = torch.sin(human_perturbation)
+            perturb_transform[1,0] = -torch.sin(human_perturbation)
+            perturb_transform = (human_center_translate.inverse()@perturb_transform@human_center_translate).numpy()
+            human_transform = human_transform@perturb_transform
+
+            human_mesh = o3d.geometry.TriangleMesh(self.human_data[human_name][f"l_h_{int(arm_angle.item())}"][f"{lr}_mesh"])
+            human_mesh.transform(human_transform)
+            human_joints_final = {}
+            for name, coord in human_joints.items():
+                joint_coord_homo = np.array([0.,0,0,1], np.float64)
+                joint_coord_homo[:3] = coord
+                joint_coord_transformed_homo = human_transform@joint_coord_homo
+                human_joints_final[name] = joint_coord_transformed_homo[:3]
+
+
+            human_normals = np.asarray(human_mesh.vertex_normals, dtype=np.float32)
+            human_xyz = np.asarray(human_mesh.vertices, dtype=np.float32)
+            human_rgb = np.rint(np.asarray(human_mesh.vertex_colors)*255).astype(np.float32)
+            human_mesh_vertices = np.concatenate([human_xyz, human_rgb, human_normals], axis=1)
+            human_sem_label = np.array([31]*human_mesh_vertices.shape[0], dtype=np.uint32)
+            human_instance_label = np.array([np.max(instance_labels)+1]*human_mesh_vertices.shape[0], dtype=np.uint32)
+            xmin = np.min(human_xyz[:,0])
+            ymin = np.min(human_xyz[:,1])
+            zmin = np.min(human_xyz[:,2])
+            xmax = np.max(human_xyz[:,0])
+            ymax = np.max(human_xyz[:,1])
+            zmax = np.max(human_xyz[:,2])
+            bbox = np.array([(xmin+xmax)/2, (ymin+ymax)/2, (zmin+zmax)/2, xmax-xmin, ymax-ymin, zmax-zmin, human_sem_label[0], human_instance_label[0]-1])
+
+
+            #CONCAT HUMAN INFO
+            mesh_vertices = np.concatenate([mesh_vertices, human_mesh_vertices], axis = 0)
+            instance_labels = np.concatenate([instance_labels, human_instance_label], axis = 0)
+            semantic_labels = np.concatenate([semantic_labels, human_sem_label], axis = 0)
+            instance_bboxes = np.concatenate([instance_bboxes,bbox[None]], axis = 0)
+
+
+
+
 
         if not self.use_color:
             point_cloud = mesh_vertices[:,0:3] # do not use color for now
@@ -195,7 +416,7 @@ class ScannetReferenceDataset(Dataset):
             height = point_cloud[:,2] - floor_height
             point_cloud = np.concatenate([point_cloud, np.expand_dims(height, 1)],1)
 
-        point_cloud, choices = random_sampling(point_cloud, self.num_points, return_choices=True)
+            point_cloud, choices = random_sampling(point_cloud, self.num_points, return_choices=True)
         instance_labels = instance_labels[choices]
         semantic_labels = semantic_labels[choices]
         pcl_color = pcl_color[choices]
@@ -370,7 +591,9 @@ class ScannetReferenceDataset(Dataset):
         data_dict["object_id_list"] = np.array(object_id_list).astype(np.int64)
         data_dict["ann_id_list"] = np.array(ann_id_list).astype(np.int64)
         data_dict["object_cat_list"] = np.array(object_cat_list).astype(np.int64)
-
+        fin_toks = ["."]*300
+        fin_toks[:len(self.scanrefer_new[idx][i]["token"])] = self.scanrefer_new[idx][i]["token"]
+        data_dict["token"] = fin_toks
         unique_multiple_list = []
         for i in range(self.lang_num_max):
             object_id = object_id_list[i]
@@ -378,7 +601,7 @@ class ScannetReferenceDataset(Dataset):
             unique_multiple = self.unique_multiple_lookup[scene_id][str(object_id)][ann_id]
             unique_multiple_list.append(unique_multiple)
         data_dict["unique_multiple_list"] = np.array(unique_multiple_list).astype(np.int64)
-
+        data_dict["scene_id"] = scene_id
         return data_dict
 
     def _get_raw2label(self):

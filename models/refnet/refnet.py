@@ -52,7 +52,7 @@ class RefNet(nn.Module):
 
             # --------- PROPOSAL MATCHING ---------
             # Match the generated proposals and select the most confident ones
-            self.relation = RelationModule(num_proposals=num_proposal, det_channel=128)  # bef 256
+            self.relation = RelationModule(num_proposals=num_proposal, det_channel=128, input_feature_dim=7)  # bef 256
             self.match = MatchModule(num_proposals=num_proposal, lang_size=(1 + int(self.use_bidir)) * hidden_size, det_channel=128)  # bef 256
 
     def forward(self, data_dict):

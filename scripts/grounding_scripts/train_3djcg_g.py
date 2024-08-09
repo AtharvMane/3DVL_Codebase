@@ -22,7 +22,7 @@ from lib.configs.config_grounding import CONF
 from models.refnet.refnet import RefNet
 from scripts.utils.AdamW import AdamW
 from scripts.utils.script_utils import set_params_lr_dict
-import crash_on_ipy
+#import crash_on_ipy
 
 
 SCANREFER_TRAIN = json.load(open(os.path.join(CONF.PATH.DATA, "ScanRefer_filtered_train.json")))
@@ -30,8 +30,9 @@ SCANREFER_VAL = json.load(open(os.path.join(CONF.PATH.DATA, "ScanRefer_filtered_
 
 # constants
 DC = ScannetDatasetConfig()
+M = torch.tensor([1,2,3]).cuda()
 
-
+print(M)
 def get_dataloader(args, scanrefer, scanrefer_new, all_scene_list, split, config, augment, shuffle=True):
     dataset = ScannetReferenceDataset(
         scanrefer=scanrefer[split],
@@ -318,7 +319,7 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", type=str, help="tag for the training, e.g. cuda_wl", default="")
-    parser.add_argument("--gpu", type=str, help="gpu", default="0")
+    #parser.add_argument("--gpu", type=str, help="gpu", default="0")
     parser.add_argument("--batch_size", type=int, help="batch size", default=14)
     parser.add_argument("--epoch", type=int, help="number of epochs", default=50)
     parser.add_argument("--verbose", type=int, help="iterations of showing verbose", default=10)
@@ -347,7 +348,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # setting
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    #os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
     # reproducibility
